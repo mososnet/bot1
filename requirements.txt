@@ -1,2 +1,6 @@
 aiohttp
 python-telegram-bot==20.3
+flask
+requests
+telebot
+opencv-python

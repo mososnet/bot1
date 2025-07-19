@@ -3,10 +3,14 @@ import tempfile
 import subprocess
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler
+from flask import Flask
+import threading
 
+# ========== إعداد مجلد gifs ==========
 UPLOAD_FOLDER = 'static/gifs'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# ========== التحقق إذا الفيديو طولي ==========
 def is_video_portrait(input_path):
     cmd = [
         'ffprobe', '-v', 'error', '-select_streams', 'v:0',
@@ -22,16 +26,21 @@ def is_video_portrait(input_path):
     except Exception:
         return False
 
+# ========== تحويل الفيديو إلى GIF ==========
 def convert_video_to_gif_ffmpeg(input_path, output_path, width=320, height=320, start=0, duration=5, max_size_mb=2.45):
     portrait = is_video_portrait(input_path)
+
     fps = 15 if duration <= 3 else 12 if duration <= 6 else 10
     fps = min(fps, 15)
 
-    base_filter = f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x00000000'
     if portrait:
-        filter_chain = f'{base_filter},hflip,fps={fps}'
+        filter_chain = (
+            f"[0:v]scale=iw*min({width}/iw\\,{height}/ih):ih*min({width}/iw\\,{height}/ih),setsar=1[fg];"
+            f"[0:v]scale={width}:{height},boxblur=luma_radius=10:luma_power=1[bg];"
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2,fps={fps}"
+        )
     else:
-        filter_chain = f'{base_filter},fps={fps}'
+        filter_chain = f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x00000000,fps={fps}'
 
     palette_path = os.path.join(tempfile.gettempdir(), "palette.png")
 
@@ -64,9 +73,13 @@ def convert_video_to_gif_ffmpeg(input_path, output_path, width=320, height=320, 
     while size_mb > max_size_mb and fps > 5 and attempt < 3:
         fps -= 2
         if portrait:
-            filter_chain = f'{base_filter},hflip,fps={fps}'
+            filter_chain = (
+                f"[0:v]scale=iw*min({width}/iw\\,{height}/ih):ih*min({width}/iw\\,{height}/ih),setsar=1[fg];"
+                f"[0:v]scale={width}:{height},boxblur=luma_radius=10:luma_power=1[bg];"
+                f"[bg][fg]overlay=(W-w)/2:(H-h)/2,fps={fps}"
+            )
         else:
-            filter_chain = f'{base_filter},fps={fps}'
+            filter_chain = f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x00000000,fps={fps}'
 
         palette_cmd[7] = filter_chain + ',palettegen'
         subprocess.run(palette_cmd, capture_output=True)
@@ -79,6 +92,7 @@ def convert_video_to_gif_ffmpeg(input_path, output_path, width=320, height=320, 
 
     return size_mb
 
+# ========== أوامر البوت ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "مرحبًا! \n"
@@ -133,8 +147,9 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         context.user_data.clear()
 
+# ========== تفعيل البوت وتشغيل Flask لبورت وهمي ==========
 if __name__ == '__main__':
-    BOT_TOKEN = "7211726528:AAGmVatPqvK-2SmlvZqKmKSGei5gNbRyMCM"  # ✅ التوكن الجديد
+    BOT_TOKEN = "7211726528:AAGmVatPqvK-2SmlvZqKmKSGei5gNbRyMCM"
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -142,4 +157,18 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
 
     print("✅ البوت شغّال الآن...")
+
+    # إعداد خادم Flask لفتح بورت وهمي
+    flask_app = Flask(__name__)
+
+    @flask_app.route('/')
+    def home():
+        return "Bot is alive!"
+
+    def run_flask():
+        flask_app.run(host="0.0.0.0", port=10000)
+
+    threading.Thread(target=run_flask).start()
+
+    # تشغيل البوت
     app.run_polling()

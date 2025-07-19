@@ -21,7 +21,6 @@ def run_flask():
 # --------------------------------------------
 
 def is_video_portrait(input_path):
-    """يرجع True إذا الفيديو طولي (ارتفاع أكبر من العرض)"""
     cmd = [
         'ffprobe', '-v', 'error', '-select_streams', 'v:0',
         '-show_entries', 'stream=width,height',
@@ -38,71 +37,41 @@ def is_video_portrait(input_path):
 
 def convert_video_to_gif_ffmpeg(input_path, output_path, width=320, height=320, start=0, duration=5, max_size_mb=2.45):
     portrait = is_video_portrait(input_path)
-
     fps = 15 if duration <= 3 else 12 if duration <= 6 else 10
     fps = min(fps, 15)
 
     if portrait:
-        filter_chain = (
-            f"[0:v]scale=iw*min({width}/iw\\,{height}/ih):ih*min({width}/iw\\,{height}/ih),setsar=1, hflip [fg];"
-            f"[0:v]scale={width}:{height},boxblur=luma_radius=10:luma_power=1,format=yuva420p, colorchannelmixer=aa=0.5 [bg];"
-            f"[bg][fg]overlay=(W-w)/2:(H-h)/2,fps={fps}"
-        )
+        filter_fg = f"[0:v]scale=iw*min({width}/iw\\,{height}/ih):ih*min({width}/iw\\,{height}/ih),setsar=1 [fg]"
+        filter_bg = f"[0:v]scale={width}:{height},boxblur=luma_radius=10:luma_power=1,format=yuva420p,colorchannelmixer=aa=0.5 [bg]"
+        overlay = f"[bg][fg]overlay=(W-w)/2:(H-h)/2,fps={fps}"
+        filter_chain = f"{filter_fg};{filter_bg};{overlay}"
     else:
         filter_chain = f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x00000000,fps={fps}'
 
     palette_path = os.path.join(tempfile.gettempdir(), "palette.png")
 
     palette_cmd = [
-        'ffmpeg',
-        '-ss', str(start),
-        '-t', str(duration),
+        'ffmpeg', '-ss', str(start), '-t', str(duration),
         '-i', input_path,
         '-vf', filter_chain + ',palettegen',
-        '-y',
-        palette_path
+        '-y', palette_path
     ]
     res1 = subprocess.run(palette_cmd, capture_output=True)
     if res1.returncode != 0:
         raise Exception(f"Palette generation failed: {res1.stderr.decode()}")
 
     gif_cmd = [
-        'ffmpeg',
-        '-ss', str(start),
-        '-t', str(duration),
-        '-i', input_path,
-        '-i', palette_path,
+        'ffmpeg', '-ss', str(start), '-t', str(duration),
+        '-i', input_path, '-i', palette_path,
         '-lavfi', filter_chain + '[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5',
         '-gifflags', '+transdiff',
-        '-y',
-        output_path
+        '-y', output_path
     ]
     res2 = subprocess.run(gif_cmd, capture_output=True)
     if res2.returncode != 0:
         raise Exception(f"GIF creation failed: {res2.stderr.decode()}")
 
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
-    attempt = 0
-    while size_mb > max_size_mb and fps > 5 and attempt < 3:
-        fps -= 2
-        if portrait:
-            filter_chain = (
-                f"[0:v]scale=iw*min({width}/iw\\,{height}/ih):ih*min({width}/iw\\,{height}/ih),setsar=1, hflip [fg];"
-                f"[0:v]scale={width}:{height},boxblur=luma_radius=10:luma_power=1,format=yuva420p, colorchannelmixer=aa=0.5 [bg];"
-                f"[bg][fg]overlay=(W-w)/2:(H-h)/2,fps={fps}"
-            )
-        else:
-            filter_chain = f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x00000000,fps={fps}'
-
-        palette_cmd[7] = filter_chain + ',palettegen'
-        subprocess.run(palette_cmd, capture_output=True)
-
-        gif_cmd[8] = filter_chain + '[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5'
-        subprocess.run(gif_cmd, capture_output=True)
-
-        size_mb = os.path.getsize(output_path) / (1024 * 1024)
-        attempt += 1
-
     return size_mb
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -143,7 +112,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with tempfile.TemporaryDirectory() as tmpdirname:
         input_path = os.path.join(tmpdirname, "input.mp4")
         output_path = os.path.join(tmpdirname, "output.gif")
-
         await file.download_to_drive(input_path)
 
         start_sec = context.user_data.get('start_sec', 0)
@@ -160,9 +128,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
 
 if __name__ == '__main__':
-    BOT_TOKEN = "7211726528:AAGmVatPqvK-2SmlvZqKmKSGei5gNbRyMCM"
+    BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_TOKEN_HERE")
 
-    # تشغيل Flask في Thread منفصل (لإبقاء بورت 8000 مفتوح)
     Thread(target=run_flask, daemon=True).start()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
